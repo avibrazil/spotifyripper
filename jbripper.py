@@ -8,82 +8,151 @@ import os, sys
 import threading
 import time
 
+reload(sys)  
+sys.setdefaultencoding('utf8')
+
+
 playback = False # set if you want to listen to the tracks that are currently ripped (start with "padsp ./jbripper.py ..." if using pulse audio)
-rawpcm = False # also saves a .pcm file with the raw PCM data as delivered by libspotify ()
+wav = False # also saves a .pcm file with the raw PCM data as delivered by libspotify ()
+fileNameMaxSize=255 # your filesystem's maximum filename size. Linux' Ext4 is 255. filename/filename/filename 
 
 pcmfile = None
 pipe = None
 ripping = False
+size = 0
 end_of_track = threading.Event()
 
 def printstr(str): # print without newline
     sys.stdout.write(str)
     sys.stdout.flush()
 
+
+def transliterate(str):
+    transliterated=str
+    transliterated=transliterated.replace('/',u'／')
+    transliterated=transliterated.replace('*',u'✱')
+    transliterated=transliterated.replace('#',u'♯')
+    transliterated=transliterated.replace(':',u'∶')
+    transliterated=transliterated.replace('?',u'⁇')
+    transliterated=transliterated.replace('\\',u'＼')
+    transliterated=transliterated.replace('|',u'￨')
+    transliterated=transliterated.replace('>',u'＞')
+    transliterated=transliterated.replace('<',u'＜')
+    transliterated=transliterated.replace('&',u'＆')    
+    return transliterated
+
+
+def unicode_truncate(s, length, encoding='utf-8'):
+    encoded = s.encode(encoding)[:length]
+    return encoded.decode(encoding, 'ignore')
+
+def track_path(track):
+    global fileNameMaxSize
+	
+    oalbum=track.album()
+    num_track = track.index()
+    year=oalbum.year()
+    album_artist=transliterate(oalbum.artist().name())
+    track_artist=transliterate(u' • '.join([str(x.name()) for x in track.artists()]))
+    track_name=transliterate(track.name())
+    album_name=transliterate(oalbum.name())
+    
+    if (album_artist == track_artist):
+        track_file="{:02d} {}".format(num_track, track_name)
+    else:
+        track_file="{:02d} {} ♫ {}".format(num_track, track_artist, track_name)
+    
+    return "{aartist}/{year:04d} • {album}/{file}".format(year=year,
+        aartist = unicode_truncate(album_artist, fileNameMaxSize),
+        album   = unicode_truncate(album_name,   fileNameMaxSize-4-2-3),
+        file    = unicode_truncate(track_file,   fileNameMaxSize-4))
+
+
 def rip_init(session, track):
-    global pipe, ripping, pcmfile, rawpcm
-    num_track = "%02d" % (track.index(),)
-    file_prefix = os.getcwd() + "/" + track.artists()[0].name() + "/" + track.album().name() + "/" + track.name()
-    file_prefix = file_prefix.replace('*', '_')
+    global pipe, ripping, wpipe, size
+
+    size = 0
+    file_prefix = track_path(track)
     mp3file = file_prefix+".mp3"
     directory = os.path.dirname(file_prefix)
+    
     if not os.path.exists(directory):
         os.makedirs(directory)
-    printstr("ripping " + file_prefix + ".mp3 ...")
-    p = Popen(["lame", "--silent", "-V0", "-h", "-r", "-", file_prefix + ".mp3"], stdin=PIPE)
+    printstr("ripping " + file_prefix + ".mp3 ...\n")
+    p = Popen(["lame", "--silent", "-V0", "-m", "s", "-h", "-r", "-", file_prefix + ".mp3"], stdin=PIPE)
     pipe = p.stdin
-    if rawpcm:
-      pcmfile = open(file_prefix + ".pcm", 'w')
+    if wav:
+      w=Popen(["ffmpeg",
+      		"-loglevel", "quiet",
+      		"-f", "s16le",
+      		"-ar", "44100",
+      		"-ac", "2",
+      		"-i", "-",
+      		file_prefix + ".wav"],
+      	stdin=PIPE)
+      wpipe=w.stdin
     ripping = True
 
 
 def rip_terminate(session, track):
     global ripping, pipe, pcmfile, rawpcm
     if pipe is not None:
-        print(' done!')
+        print('\ndone!')
         pipe.close()
-    if rawpcm:
-        pcmfile.close()
+    if wav:
+        wpipe.close()
     ripping = False
 
 def rip(session, frames, frame_size, num_frames, sample_type, sample_rate, channels):
+    global size
+    printstr('.')
     if ripping:
-        printstr('.')
         pipe.write(frames);
-        if rawpcm:
-          pcmfile.write(frames)
+#        printstr("     " + size + " bytes\r")
+        if wav:
+          wpipe.write(frames)
 
 def rip_id3(session, track): # write ID3 data
-    num_track = "%02d" % (track.index(),)
-    mp3file = track.name()+".mp3"
-    artist = track.artists()[0].name()
-    album = track.album().name()
-    title = track.name()
-    year = track.album().year()
-    directory = os.getcwd() + "/" + track.artists()[0].name() + "/" + track.album().name() + "/"
+    file_prefix = track_path(track)
+    mp3file = file_prefix+".mp3"
+    directory = os.path.dirname(file_prefix)
 
     # download cover
     image = session.image_create(track.album().cover())
     while not image.is_loaded(): # does not work from MainThread!
         time.sleep(0.1)
-    fh_cover = open('cover.jpg','wb')
+    fh_cover = open(directory + '/folder.jpg','wb')
     fh_cover.write(image.data())
     fh_cover.close()
 
+
+    oalbum=track.album()
+    num_track = str("%02d" % (track.index(),))
+    year=str(oalbum.year())
+    album_artist=transliterate(oalbum.artist().name())
+    track_artist=u' • '.join([str(x.name()) for x in track.artists()])
+    track_name=track.name()
+    album_name=oalbum.name()
+    
+#    spotify_link="This track on Spotify is {}".format(track.link())
+
     # write id3 data
     call(["eyeD3",
-          "--add-image", "cover.jpg:FRONT_COVER",
-          "-t", title,
-          "-a", artist,
-          "-A", album,
-          "-n", str(num_track),
-          "-Y", str(year),
+          "--add-image", directory + "/folder.jpg:FRONT_COVER",
+          "-t", track_name,
+          "-a", track_artist,
+          "-b", album_artist,
+ #         "-c", spotify_link,
+          "-A", album_name,
+          "-n", num_track,
+          "-Y", year,
+          "--to-v2.3",
           "-Q",
-          (directory + mp3file).replace('*', '_')
+          mp3file
     ])
 
     # delete cover
-    call(["rm", "-f", "cover.jpg"])
+    # call(["rm", "-f", "folder.jpg"])
 
 class RipperThread(threading.Thread):
     def __init__(self, ripper):
