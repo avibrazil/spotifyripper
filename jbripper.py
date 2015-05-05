@@ -180,7 +180,7 @@ def rip_id3(session, track): # write ID3 data
 #     ])
 
 
-    id3.ID3_DEFAULT_VERSION = (2, 3, 0)
+#    id3.ID3_DEFAULT_VERSION = (2, 3, 0)
 
     audiofile = eyed3.load(mp3file)
     audiofile.initTag()
@@ -188,6 +188,8 @@ def rip_id3(session, track): # write ID3 data
     audiofile.tag.album_artist    = album_artist
     audiofile.tag.album           = album_name
     audiofile.tag.release_date    = year
+    audiofile.tag.recording_date  = year
+    audiofile.tag.original_release_date    = year
     audiofile.tag.artist          = track_artist
     audiofile.tag.track_num       = (num_track, None)
     audiofile.tag.title           = track_name
@@ -197,10 +199,12 @@ def rip_id3(session, track): # write ID3 data
     # append image to tags
 #     audiofile.tag.images.set(3,image.data(),
 #         u'image/jpeg',
-#         u'Front Cover')
+#         u'Front Cover'
+#     )
 
-    audiofile.tag.save()
-
+	# Save ID3 using version 2.3 for maximum compatibility. UTF-16 is required for 2.3
+    audiofile.tag.save(version=(2, 3, 0), encoding='utf16')
+    
 
 
 
