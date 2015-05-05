@@ -7,6 +7,8 @@ from jukebox import Jukebox, container_loaded
 import os, sys
 import threading
 import time
+from eyed3 import id3
+import eyed3
 
 reload(sys)  
 sys.setdefaultencoding('utf8')
@@ -15,6 +17,7 @@ sys.setdefaultencoding('utf8')
 playback = False # set if you want to listen to the tracks that are currently ripped (start with "padsp ./jbripper.py ..." if using pulse audio)
 wav = False # also saves a .pcm file with the raw PCM data as delivered by libspotify ()
 fileNameMaxSize=255 # your filesystem's maximum filename size. Linux' Ext4 is 255. filename/filename/filename 
+defaultgenre = u'☣ UNKNOWN ♺'
 
 pcmfile = None
 pipe = None
@@ -69,7 +72,7 @@ def track_path(track):
 
 
 def rip_init(session, track):
-    global pipe, ripping, wpipe, size
+    global pipe, ripping, wpipe, size, defaultgenre
 
     size = 0
     file_prefix = track_path(track)
@@ -79,18 +82,36 @@ def rip_init(session, track):
     if not os.path.exists(directory):
         os.makedirs(directory)
     printstr("ripping " + file_prefix + ".mp3 ...\n")
-    p = Popen(["lame", "--silent", "-V0", "-m", "s", "-h", "-r", "-", file_prefix + ".mp3"], stdin=PIPE)
+    p = Popen(["lame",
+            "--silent",
+            "-V0",       # VBR highest quality
+            "-m", "s",   # plain stereo (no joint stereo)
+            "-h",        # high quality, same as -q 2
+            "-r",        # input is raw PCM
+#            "--id3v2-utf16",
+#            "--id3v2-only",
+#            "--tg", defaultgenre,
+#            "--tt", track.name(),
+#            "--ta", u' • '.join([str(x.name()) for x in track.artists()]),
+#            "--tl", track.album(),
+#            "--ty", str(track.album().year()),
+#            "--tn", str("%02d" % (track.index(),)),
+            "-", file_prefix + ".mp3"],
+        stdin=PIPE)
+
     pipe = p.stdin
+    
     if wav:
-      w=Popen(["ffmpeg",
-      		"-loglevel", "quiet",
-      		"-f", "s16le",
-      		"-ar", "44100",
-      		"-ac", "2",
-      		"-i", "-",
-      		file_prefix + ".wav"],
-      	stdin=PIPE)
-      wpipe=w.stdin
+        w=Popen(["ffmpeg",
+            "-loglevel", "quiet",
+            "-f", "s16le",
+            "-ar", "44100",
+            "-ac", "2",
+            "-i", "-",
+            file_prefix + ".wav"],
+        stdin=PIPE)
+        wpipe=w.stdin
+    
     ripping = True
 
 
@@ -106,6 +127,8 @@ def rip_terminate(session, track):
 def rip(session, frames, frame_size, num_frames, sample_type, sample_rate, channels):
     global size
     printstr('.')
+#    printstr("frame_size={}, num_frames={}, sample_type={}, sample_rate={}, channels={}\n".format(
+#    	frame_size, num_frames, sample_type, sample_rate, channels))
     if ripping:
         pipe.write(frames);
 #        printstr("     " + size + " bytes\r")
@@ -119,8 +142,10 @@ def rip_id3(session, track): # write ID3 data
 
     # download cover
     image = session.image_create(track.album().cover())
+
     while not image.is_loaded(): # does not work from MainThread!
         time.sleep(0.1)
+    
     fh_cover = open(directory + '/folder.jpg','wb')
     fh_cover.write(image.data())
     fh_cover.close()
@@ -134,25 +159,51 @@ def rip_id3(session, track): # write ID3 data
     track_name=track.name()
     album_name=oalbum.name()
     
-#    spotify_link="This track on Spotify is {}".format(track.link())
+#     spotify_links="Spotify track: {0}\nSpotify album: {1}".format(
+#         track.link().url,
+#         oalbum.link().url
+#     )
 
     # write id3 data
-    call(["eyeD3",
-          "--add-image", directory + "/folder.jpg:FRONT_COVER",
-          "-t", track_name,
-          "-a", track_artist,
-          "-b", album_artist,
- #         "-c", spotify_link,
-          "-A", album_name,
-          "-n", num_track,
-          "-Y", year,
-          "--to-v2.3",
-          "-Q",
-          mp3file
-    ])
+#     call(["eyeD3",
+#           "--add-image", directory + "/folder.jpg:FRONT_COVER",
+#           "-t", track_name,
+#           "-a", track_artist,
+#           "-b", album_artist,
+#  #         "-c", spotify_link,
+#           "-A", album_name,
+#           "-n", num_track,
+#           "-Y", year,
+#           "--to-v2.3",
+#           "-Q",
+#           mp3file
+#     ])
 
-    # delete cover
-    # call(["rm", "-f", "folder.jpg"])
+
+    id3.ID3_DEFAULT_VERSION = (2, 3, 0)
+
+    audiofile = eyed3.load(mp3file)
+    audiofile.initTag()
+    
+    audiofile.tag.album_artist    = album_artist
+    audiofile.tag.album           = album_name
+    audiofile.tag.release_date    = year
+    audiofile.tag.artist          = track_artist
+    audiofile.tag.track_num       = (num_track, None)
+    audiofile.tag.title           = track_name
+    audiofile.tag.genre           = defaultgenre
+#    audiofile.tag.comments.set(     spotify_links)
+
+    # append image to tags
+#     audiofile.tag.images.set(3,image.data(),
+#         u'image/jpeg',
+#         u'Front Cover')
+
+    audiofile.tag.save()
+
+
+
+
 
 class RipperThread(threading.Thread):
     def __init__(self, ripper):
