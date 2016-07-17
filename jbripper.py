@@ -23,6 +23,8 @@ pcmfile = None
 pipe = None
 ripping = False
 size = 0
+feedbackchar = "-"
+feedbackcharDelay = 0
 end_of_track = threading.Event()
 
 def printstr(str): # print without newline
@@ -76,28 +78,47 @@ def rip_init(session, track):
 
     size = 0
     file_prefix = track_path(track)
-    mp3file = file_prefix+".mp3"
+#    mp3file = file_prefix+".mp3"
+    m4afile = file_prefix+".m4a"
     directory = os.path.dirname(file_prefix)
     
     if not os.path.exists(directory):
         os.makedirs(directory)
-    printstr("ripping " + file_prefix + ".mp3 ...\n")
-    p = Popen(["lame",
-            "--silent",
-            "-V0",       # VBR highest quality
-            "-m", "s",   # plain stereo (no joint stereo)
-            "-h",        # high quality, same as -q 2
-            "-r",        # input is raw PCM
-#            "--id3v2-utf16",
-#            "--id3v2-only",
-#            "--tg", defaultgenre,
-#            "--tt", track.name(),
-#            "--ta", u' • '.join([str(x.name()) for x in track.artists()]),
-#            "--tl", track.album(),
-#            "--ty", str(track.album().year()),
-#            "--tn", str("%02d" % (track.index(),)),
-            "-", file_prefix + ".mp3"],
+    printstr("ripping " + file_prefix + ".m4a ...\n")
+    p = Popen(["faac",
+            "-P",
+            "-C", "2",
+            "-w",
+            "-s",
+            "-q", "300",
+            "--genre", defaultgenre,
+            "--title", track.name(),
+            "--artist", u' • '.join([str(x.name()) for x in track.artists()]),
+            "--album", track.album(),
+            "--year", str(track.album().year()),
+            "--track", str("%02d" % (track.index(),)),
+            "--cover-art", directory + "/folder.jpg",
+            "-o", file_prefix + ".m4a"],
+            "-",
         stdin=PIPE)
+
+#     printstr("ripping " + file_prefix + ".mp3 ...\n")
+#     p = Popen(["lame",
+#             "--silent",
+#             "-V2",       # VBR slightly less than highest quality
+#             "-m", "s",   # plain stereo (no joint stereo)
+#             "-h",        # high quality, same as -q 2
+#             "-r",        # input is raw PCM
+# #            "--id3v2-utf16",
+# #            "--id3v2-only",
+# #            "--tg", defaultgenre,
+# #            "--tt", track.name(),
+# #            "--ta", u' • '.join([str(x.name()) for x in track.artists()]),
+# #            "--tl", track.album(),
+# #            "--ty", str(track.album().year()),
+# #            "--tn", str("%02d" % (track.index(),)),
+#             "-", file_prefix + ".mp3"],
+#         stdin=PIPE)
 
     pipe = p.stdin
     
@@ -118,15 +139,32 @@ def rip_init(session, track):
 def rip_terminate(session, track):
     global ripping, pipe, pcmfile, rawpcm
     if pipe is not None:
-        print('\ndone!')
+        print(' done!')
         pipe.close()
     if wav:
         wpipe.close()
     ripping = False
 
 def rip(session, frames, frame_size, num_frames, sample_type, sample_rate, channels):
-    global size
-    printstr('.')
+    global size, feedbackchar, feedbackcharDelay
+
+    sys.stdout.write('\r' + feedbackchar)
+    sys.stdout.flush()
+
+    if feedbackcharDelay > 5:
+        feedbackcharDelay = 0
+        if feedbackchar == '-':
+            feedbackchar='\\'
+        elif feedbackchar == '\\':
+            feedbackchar='|'
+        elif feedbackchar == '|':
+            feedbackchar='/'
+        elif feedbackchar == '/':
+            feedbackchar='-'
+
+    feedbackcharDelay += 1
+        
+#    printstr('.')
 #    printstr("frame_size={}, num_frames={}, sample_type={}, sample_rate={}, channels={}\n".format(
 #    	frame_size, num_frames, sample_type, sample_rate, channels))
     if ripping:
@@ -246,7 +284,7 @@ class RipperThread(threading.Thread):
                 end_of_track.clear() # TODO check if necessary
 
                 rip_terminate(session, track)
-                rip_id3(session, track)
+                # rip_id3(session, track)
 
         self.ripper.disconnect()
 
