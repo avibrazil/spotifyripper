@@ -7,6 +7,7 @@ from jukebox import Jukebox, container_loaded
 import os, sys
 import threading
 import time
+import pprint
 from eyed3 import id3
 import eyed3
 
@@ -16,6 +17,8 @@ sys.setdefaultencoding('utf8')
 
 playback = False # set if you want to listen to the tracks that are currently ripped (start with "padsp ./jbripper.py ..." if using pulse audio)
 wav = False # also saves a .pcm file with the raw PCM data as delivered by libspotify ()
+m4a = False
+mp3 = True
 fileNameMaxSize=255 # your filesystem's maximum filename size. Linux' Ext4 is 255. filename/filename/filename 
 defaultgenre = u'☣ UNKNOWN ♺'
 
@@ -73,78 +76,92 @@ def track_path(track):
         file    = unicode_truncate(track_file,   fileNameMaxSize-4))
 
 
+# Setup all pipes
 def rip_init(session, track):
     global pipe, ripping, wpipe, size, defaultgenre
 
     size = 0
     file_prefix = track_path(track)
-#    mp3file = file_prefix+".mp3"
-    m4afile = file_prefix+".m4a"
     directory = os.path.dirname(file_prefix)
     
     if not os.path.exists(directory):
         os.makedirs(directory)
-    printstr("ripping " + file_prefix + ".m4a ...\n")
-    p = Popen(["faac",
-            "-P",
-            "-C", "2",
-            "-w",
-            "-s",
-            "-q", "300",
-            "--genre", defaultgenre,
-            "--title", track.name(),
-            "--artist", u' • '.join([str(x.name()) for x in track.artists()]),
-            "--album", track.album(),
-            "--year", str(track.album().year()),
-            "--track", str("%02d" % (track.index(),)),
-            "--cover-art", directory + "/folder.jpg",
-            "-o", file_prefix + ".m4a"],
-            "-",
-        stdin=PIPE)
 
-#     printstr("ripping " + file_prefix + ".mp3 ...\n")
-#     p = Popen(["lame",
-#             "--silent",
-#             "-V2",       # VBR slightly less than highest quality
-#             "-m", "s",   # plain stereo (no joint stereo)
-#             "-h",        # high quality, same as -q 2
-#             "-r",        # input is raw PCM
-# #            "--id3v2-utf16",
-# #            "--id3v2-only",
-# #            "--tg", defaultgenre,
-# #            "--tt", track.name(),
-# #            "--ta", u' • '.join([str(x.name()) for x in track.artists()]),
-# #            "--tl", track.album(),
-# #            "--ty", str(track.album().year()),
-# #            "--tn", str("%02d" % (track.index(),)),
-#             "-", file_prefix + ".mp3"],
-#         stdin=PIPE)
 
-    pipe = p.stdin
+    pipe = []
+    
+    if m4a:
+        # FAAC 1.28 doesn't work with standard inputs. This code is useless.
+        printstr("ripping " + file_prefix + ".m4a ...\n")
+        m4aPipe = Popen(["faac",
+                        "-P",
+                        "-R", str("44100"),
+                        "-w",
+                        "-s",
+                        "-q", str("400"),
+                        "--genre", str(defaultgenre),
+                        "--title", str(track.name()),
+                        "--artist", u' • '.join([str(x.name()) for x in track.artists()]),
+                        "--album", str(track.album()),
+                        "--year", str(track.album().year()),
+                        "--track", str("%02d" % (track.index(),)),
+#                        "--cover-art", str(directory + "/folder.jpg"),
+                        "--comment", "Spotify PCM + 'faac -q 400'",
+                        "-o", file_prefix + ".m4a",
+                        "-"],
+            stdin=PIPE)
+        
+        pipe.append(m4aPipe.stdin)
+
+    if mp3:
+        printstr("ripping " + file_prefix + ".mp3 ...\n")
+        mp3Pipe = Popen(["lame",
+                        "--silent",
+                        "-V2",       # VBR slightly less than highest quality
+                        "-m", "s",   # plain stereo (no joint stereo)
+                        "-h",        # high quality, same as -q 2
+                        "-r",        # input is raw PCM
+                        "--id3v2-utf16",
+                        "--id3v2-only",
+                        "--tg", str(defaultgenre),
+                        "--tt", str(track.name()),
+                        "--ta", u' • '.join([str(x.name()) for x in track.artists()]),
+                        "--tl", str(track.album()),
+                        "--ty", str(track.album().year()),
+                        "--tn", str("%02d" % (track.index(),)),
+                        "--tc", "Spotify PCM + 'lame -V2 -m s -h'",
+                        "-", file_prefix + ".mp3"],
+            stdin=PIPE)
+            
+        pipe.append(mp3Pipe.stdin)
     
     if wav:
-        w=Popen(["ffmpeg",
-            "-loglevel", "quiet",
-            "-f", "s16le",
-            "-ar", "44100",
-            "-ac", "2",
-            "-i", "-",
-            file_prefix + ".wav"],
+        wavPipe=Popen(["ffmpeg",
+                        "-loglevel", "quiet",
+                        "-f", "s16le",
+                        "-ar", "44100",
+                        "-ac", "2",
+                        "-i", "-",
+                        file_prefix + ".wav"],
         stdin=PIPE)
-        wpipe=w.stdin
+        
+        pipe.append(wavPipe.stdin)
     
     ripping = True
 
 
 def rip_terminate(session, track):
     global ripping, pipe, pcmfile, rawpcm
+
     if pipe is not None:
+        for p in pipe:
+            p.close()
         print(' done!')
-        pipe.close()
-    if wav:
-        wpipe.close()
+
     ripping = False
 
+
+# This callback is called for each frame of each track
 def rip(session, frames, frame_size, num_frames, sample_type, sample_rate, channels):
     global size, feedbackchar, feedbackcharDelay
 
@@ -167,11 +184,17 @@ def rip(session, frames, frame_size, num_frames, sample_type, sample_rate, chann
 #    printstr('.')
 #    printstr("frame_size={}, num_frames={}, sample_type={}, sample_rate={}, channels={}\n".format(
 #    	frame_size, num_frames, sample_type, sample_rate, channels))
-    if ripping:
-        pipe.write(frames);
-#        printstr("     " + size + " bytes\r")
-        if wav:
-          wpipe.write(frames)
+
+#    pprint.pprint(pipe)
+
+    for p in pipe:
+        p.write(frames)
+
+#     if ripping:
+#         pipe.write(frames);
+# #        printstr("     " + size + " bytes\r")
+#         if wav:
+#           wpipe.write(frames)
 
 def rip_id3(session, track): # write ID3 data
     file_prefix = track_path(track)
