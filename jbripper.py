@@ -16,9 +16,10 @@ sys.setdefaultencoding('utf8')
 
 
 playback = False # set if you want to listen to the tracks that are currently ripped (start with "padsp ./jbripper.py ..." if using pulse audio)
-wav = False # also saves a .pcm file with the raw PCM data as delivered by libspotify ()
-m4a = False
+wav = True # also saves a .pcm file with the raw PCM data as delivered by libspotify ()
+aac = True
 mp3 = True
+alac = True
 fileNameMaxSize=255 # your filesystem's maximum filename size. Linux' Ext4 is 255. filename/filename/filename 
 defaultgenre = u'☣ UNKNOWN ♺'
 
@@ -54,7 +55,7 @@ def unicode_truncate(s, length, encoding='utf-8'):
     encoded = s.encode(encoding)[:length]
     return encoded.decode(encoding, 'ignore')
 
-def track_path(track):
+def track_path(track, format):
     global fileNameMaxSize
 	
     oalbum=track.album()
@@ -70,7 +71,8 @@ def track_path(track):
     else:
         track_file="{:02d} {} ♫ {}".format(num_track, track_artist, track_name)
     
-    return "{aartist}/{year:04d} • {album}/{file}".format(year=year,
+    return "{aartist}/{year:04d} • {album}/{ff}/{file}".format(
+        year=year, ff=format,
         aartist = unicode_truncate(album_artist, fileNameMaxSize),
         album   = unicode_truncate(album_name,   fileNameMaxSize-4-2-3),
         file    = unicode_truncate(track_file,   fileNameMaxSize-4))
@@ -81,39 +83,17 @@ def rip_init(session, track):
     global pipe, ripping, wpipe, size, defaultgenre
 
     size = 0
-    file_prefix = track_path(track)
-    directory = os.path.dirname(file_prefix)
-    
-    if not os.path.exists(directory):
-        os.makedirs(directory)
 
 
     pipe = []
     
-    if m4a:
-        # FAAC 1.28 doesn't work with standard inputs. This code is useless.
-        printstr("ripping " + file_prefix + ".m4a ...\n")
-        m4aPipe = Popen(["faac",
-                        "-P",
-                        "-R", str("44100"),
-                        "-w",
-                        "-s",
-                        "-q", str("400"),
-                        "--genre", str(defaultgenre),
-                        "--title", str(track.name()),
-                        "--artist", u' • '.join([str(x.name()) for x in track.artists()]),
-                        "--album", str(track.album()),
-                        "--year", str(track.album().year()),
-                        "--track", str("%02d" % (track.index(),)),
-#                        "--cover-art", str(directory + "/folder.jpg"),
-                        "--comment", "Spotify PCM + 'faac -q 400'",
-                        "-o", file_prefix + ".m4a",
-                        "-"],
-            stdin=PIPE)
-        
-        pipe.append(m4aPipe.stdin)
-
     if mp3:
+        file_prefix = track_path(track,"mp3")
+        directory = os.path.dirname(file_prefix)
+    
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+            
         printstr("ripping " + file_prefix + ".mp3 ...\n")
         mp3Pipe = Popen(["lame",
                         "--silent",
@@ -136,6 +116,14 @@ def rip_init(session, track):
         pipe.append(mp3Pipe.stdin)
     
     if wav:
+        file_prefix = track_path(track,"wav")
+        directory = os.path.dirname(file_prefix)
+    
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        printstr("ripping " + file_prefix + ".wav ...\n")
+            
         wavPipe=Popen(["ffmpeg",
                         "-loglevel", "quiet",
                         "-f", "s16le",
@@ -143,20 +131,78 @@ def rip_init(session, track):
                         "-ac", "2",
                         "-i", "-",
                         file_prefix + ".wav"],
-        stdin=PIPE)
+            stdin=PIPE)
         
         pipe.append(wavPipe.stdin)
     
+    if alac:
+        file_prefix = track_path(track,"alac")
+        directory = os.path.dirname(file_prefix)
+    
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+            
+        printstr("ripping " + file_prefix + ".m4a (ALAC) ...\n")
+            
+        alacPipe=Popen(["ffmpeg",
+                        "-loglevel", "quiet",
+                        "-y",
+                        "-f", "s16le",
+                        "-ar", "44100",
+                        "-ac", "2",
+                        "-i", "-",
+
+                        "-acodec", "alac",
+                        
+                        "-metadata", "genre=" + str(defaultgenre),
+                        "-metadata", "title=" + str(track.name()),
+                        "-metadata", "artist=" + u' • '.join([str(x.name()) for x in track.artists()]),
+                        "-metadata", "album=" + str(track.album()),
+                        "-metadata", "album_artist=" + str(track.album().artist().name()),
+                        "-metadata", "date=" + str(track.album().year()),
+                        "-metadata", "track=" + str("%02d" % (track.index(),)),
+                        "-metadata", "encoder=" + "Spotify PCM + 'ffmpeg -acodec alac'",
+                        
+                        file_prefix + ".m4a"],
+            stdin=PIPE)
+        
+        pipe.append(alacPipe.stdin)
+        
     ripping = True
 
 
 def rip_terminate(session, track):
-    global ripping, pipe, pcmfile, rawpcm
+    global ripping, pipe, defaultgenre
 
     if pipe is not None:
         for p in pipe:
             p.close()
         print(' done!')
+
+
+    if aac:
+        wfile_prefix = track_path(track,"wav")
+        file_prefix = track_path(track,"aac")
+        directory = os.path.dirname(file_prefix)
+    
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
+        printstr("ripping " + file_prefix + ".m4a ...\n")
+        Popen(["faac",
+                "-w",
+                "-s",
+                "-q", str("300"),
+                "--genre", str(defaultgenre),
+                "--title", str(track.name()),
+                "--artist", u' • '.join([str(x.name()) for x in track.artists()]),
+                "--album", str(track.album()),
+                "--year", str(track.album().year()),
+                "--track", str("%02d" % (track.index(),)),
+#                        "--cover-art", str(directory + "/folder.jpg"),
+                "--comment", "Spotify PCM + 'faac -q 300'",
+                "-o", file_prefix + ".m4a",
+                wfile_prefix + ".wav"])
 
     ripping = False
 
